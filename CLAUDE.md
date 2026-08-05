@@ -3,8 +3,9 @@ Estimate censored bike demand, simulate station inventory, allocate a fixed
 incentive budget to maximize fill rate. See SPEC.md for full design.
 
 # Current phase
-Phase 1 complete (45.5M trips normalized, ~0.6% under published 2025 total
-of 45.76M). Next: Phase 2.
+Phase 3 complete (panel.parquet: 79.8M dense station-interval rows, all
+invariants passing). Next: Phase 4, inventory reconstruction -- use plan
+mode, real design fork per RUNBOOK.md.
 
 # Non-negotiables
 - NEVER write code against an assumed schema. Print columns from the actual
