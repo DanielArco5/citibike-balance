@@ -1,0 +1,33 @@
+# Assumptions and knobs that would otherwise be hardcoded inline. Per
+# CLAUDE.md: money and elasticity assumptions live here; inventory
+# reconstruction knobs are here too, for the same reason -- so every
+# non-obvious number in the pipeline is visible and diffable in one place.
+
+inventory_reconstruction:
+  # Per-station LP solved over Monday-aligned calendar weeks (SPEC.md §4).
+  # Weight on |I0 - anchor_prior| in the LP objective, relative to a unit
+  # weight of 1.0 per bike of inferred non-trip movement (N -- originally
+  # called "rebalancing," renamed once it became clear the flow-balance
+  # signal can't distinguish operator rebalancing from maintenance pulls,
+  # broken-bike removal, or e-bike battery swaps -- see
+  # src/models/inventory.py's module docstring and DECISIONS.md).
+  #
+  # MUST be > 1.0. Counterintuitive at first, but a unit test caught the
+  # failure mode directly: with weight < 1, the LP found it cheaper to
+  # silently redefine the week's starting inventory than to credit real
+  # non-trip movement, every time a violation happened to be explainable by
+  # shifting the anchor (e.g. anchor=5, capacity=20, a single interval that
+  # drains -8: moving I0 to 8 costs weight*3, injecting N_in=3 costs 1*3 --
+  # at weight=0.1 the solver picks the anchor shift and reports N_in=0,
+  # which is wrong and would systematically undercount non-trip movement).
+  # Weight > 1 makes crediting N strictly the cheaper explanation for any
+  # real violation, so the prior only matters as an actual tie-breaker:
+  # station-weeks with zero violations under any anchor, where N=0 and
+  # anchor=prior are both already the cheapest answer with nothing to trade
+  # off. See tests/test_inventory.py for the regression test.
+  anchor_prior_weight: 2.0
+
+  # Week 1 of each station's history has no prior week to chain an anchor
+  # from. capacity/2 is the least-informative default precisely because
+  # it's the case where the prior can't matter unless the data disagrees.
+  week1_anchor_fraction_of_capacity: 0.5
