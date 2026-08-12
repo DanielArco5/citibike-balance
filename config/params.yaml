@@ -31,3 +31,40 @@ inventory_reconstruction:
   # from. capacity/2 is the least-informative default precisely because
   # it's the case where the prior can't matter unless the data disagrees.
   week1_anchor_fraction_of_capacity: 0.5
+
+demand_model:
+  # Bucket edges (in consecutive 15-min intervals) for the censoring
+  # run-length severity proxy used in unmet-demand imputation (SPEC.md §3
+  # step 3, Phase 5 plan). SPEC.md describes scaling by
+  # stockout_minutes/interval_minutes, but minutes_empty/minutes_full
+  # (data/processed/inventory.parquet) are a binary 0-or-15 re-encoding of
+  # is_bike_empty/is_dock_full, not a continuous within-interval
+  # measurement -- the LP only resolves state at 15-min grid points (see
+  # src/models/inventory.py's "Coarse per-bucket proxy" comment). Run-length
+  # (how many consecutive intervals the current censored spell has lasted)
+  # is the real, data-grounded severity signal instead. Edges are upper-
+  # inclusive interval counts: with [1, 4], bucket 0 = isolated 1-interval
+  # spells, bucket 1 = 2-4 intervals, bucket 2 = 5+ intervals.
+  run_length_bucket_edges: [1, 4]
+
+  # Memory-safety restructure knobs (see the Phase 6 plan at
+  # /Users/danielcrown1/.claude/plans/lucky-leaping-zebra.md). panel.parquet
+  # spans 2024-12-31 through 2025-12-31; RUNBOOK.md's "hold out the last 3
+  # months by time" -> Oct/Nov/Dec 2025. Explicit date, not computed at
+  # runtime, so a later panel refresh doesn't silently move the boundary.
+  # Rows on/after this date never train the GBT/GLM or contribute to target
+  # encoding -- only calibration (against real held-out censoring) and final
+  # imputed output.
+  holdout_start_date: "2025-10-01"
+
+  # GBT/GLM fit on a stratified sample of the uncensored TRAIN pool
+  # (~55-58M rows/direction), not the full pool -- bounds the pandas-
+  # conversion + sklearn .fit() memory on this 16GB machine. Target encoding
+  # (station_id/zone_agg means) is computed on the FULL train population
+  # regardless, since it's a cheap aggregation and shouldn't depend on
+  # sampling noise. Strata = (month_key, hour_of_week), not per-station --
+  # 12 x 168 x 2,428 stations is too sparse to stratify on directly, and
+  # station coverage falls out for free across a (month, hour_of_week)
+  # sample of this size.
+  fit_sample_size: 8000000
+  fit_sample_seed: 0
