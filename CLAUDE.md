@@ -3,10 +3,26 @@ Estimate censored bike demand, simulate station inventory, allocate a fixed
 incentive budget to maximize fill rate. See SPEC.md for full design.
 
 # Current phase
-Phase 4 complete (inventory.parquet: 75.8M rows, bounds validated clean,
-DOT cross-check within 1.06-1.79x -- see DECISIONS.md for why that's the
-expected direction, not residual error). Next: Phase 5, demand model +
-censoring -- use plan mode, real design fork per RUNBOOK.md.
+Phase 6 complete: unmet demand (demand.py, censoring.py) + substitution
+netting (substitution.py) + two-panel heatmap (heatmap.py) all run
+end-to-end on the real ~76M-row panel, chunked per month (see memory rule
+below) after a first attempt thrashed for 8+ hours and was killed. Heatmap
+is DIAGNOSTIC ONLY -- ranked by per-dock lower-confidence-bound (primary)
+and raw volume (secondary); it shows where/when scarcity occurs, not where
+a bike is worth allocating. Ranking for allocation is deferred to Phase 8's
+marginal value, which dissolves the volume-vs-rate tension per-dock
+ranking can't resolve -- see DECISIONS.md, "volume vs. per-dock ranking"
+and its Phase 8 deferral note. Next: Phase 7, the forward simulator (hard
+gate -- must validate against a historical week before Phase 8 proceeds).
+
+# Memory (non-negotiable)
+Machine has 16GB RAM; the panel is ~73-80M rows. Any full-panel operation
+must be chunked, streamed, or checkpointed -- never materialize the full
+frame in multiple copies (e.g. polars -> pandas conversions on the whole
+year, or fitting/predicting over all months at once with no intermediate
+write). Always test on one month and report peak RSS (stdlib
+`resource.getrusage(resource.RUSAGE_SELF).ru_maxrss`, no psutil) before
+running full-year.
 
 # Non-negotiables
 - NEVER write code against an assumed schema. Print columns from the actual
