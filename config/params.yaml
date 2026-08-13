@@ -68,3 +68,218 @@ demand_model:
   # sample of this size.
   fit_sample_size: 8000000
   fit_sample_seed: 0
+
+simulation:
+  # Phase 7 forward simulator (SPEC.md §4, RUNBOOK Phase 7). Plan-mode
+  # discussion before this phase's implementation is at
+  # /Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md.
+
+  # OD destination-choice backoff hierarchy (src/models/od_shares.py). No
+  # OD-share artifact existed before this phase -- origin x hour-of-week is
+  # ~2,270 x 168 = ~381K cells, most too thin to trust directly. Each cell
+  # picks the MOST SPECIFIC tier with >= min_trips_per_cell historical
+  # trips: origin x hour-of-week -> zone x hour-of-week -> zone x daypart
+  # -> global (whole-system marginal, always available). Confirmed in the
+  # Phase 7 plan-mode discussion: report what fraction of destination draws
+  # end up served by each tier, not just gate pass/fail -- a large share
+  # falling through to global is a real caveat, not a bug.
+  min_trips_per_cell: 30
+
+  # Hour-of-day boundaries splitting each day into 6 buckets (0=night,
+  # 1=am_peak, 2=midday, 3=pm_peak, 4=evening, 5=late_night), crossed with
+  # weekday/weekend for 12 total dayparts -- the coarsest OD-conditioning
+  # tier before falling all the way back to global. Nothing in the repo
+  # defined dayparts before this phase; these edges are a first pass, not
+  # validated against a trip-count histogram yet (see od_shares.py).
+  daypart_hour_edges: [7, 10, 16, 19, 22]
+
+  # Reroute-on-full-dock (SPEC.md §4: "no dock -> arrival must re-route to
+  # nearest station with a dock"). Confirmed in the Phase 7 plan-mode
+  # discussion: chain to the nearest station with a free dock, capped at
+  # whichever of these binds first -- roughly what a rider will tolerate
+  # before giving up. Past the cap, the trip counts fully lost, not
+  # degraded; that fully-lost count is sensitive to these two values, which
+  # is why they're config knobs and not inline constants.
+  max_reroute_radius_m: 1000.0
+  max_reroute_hops: 3
+
+  # Fixed seed for reproducible stochastic runs (RUNBOOK Phase 7: "Include
+  # a fixed seed and make runs reproducible").
+  seed: 0
+
+  # First full week of demand_model's holdout window (2025-10-01 onward)
+  # with no major holiday in it -- the Phase 7 validation replay week.
+  validation_week_start: "2025-10-06"
+
+marginal_value:
+  # Phase 8 (src/opt/marginal_value.py). Per DECISIONS.md's Phase 7
+  # follow-up: the forward simulator cannot supply P(stockout | s, t) at
+  # station-hour resolution (confirmed, not just suspected -- 6-week
+  # pooled correlation plateaus at ~0.10), so MV(s,t) is derived
+  # EMPIRICALLY from Phase 4-6 outputs (unmet_demand_net.parquet,
+  # inventory.parquet) instead of by simulation. Two methods, cross-checked
+  # against each other rather than either one trusted blindly:
+
+  # A (station, hour-of-week) cell's cross-check regression (empirical
+  # marginal slope from real week-to-week starting-inventory variation)
+  # needs enough weekly observations to mean something -- below this many
+  # weeks of data, the cell is skipped rather than reported on a
+  # near-single-point "slope."
+  min_weeks_for_cross_check: 10
+
+  # Retained diagnostic threshold, not a gate: `relaxation_time_minutes`
+  # explains WHY the first (stationary M/M/1/K) formulation was abandoned
+  # -- median relaxation time across the real network came back ~9,249
+  # minutes (~6.4 days), because ~63% of station-hours run near
+  # rho=lambda/mu~1 (active rebalancing pushes the system there by design)
+  # and most are low-traffic at 15-min granularity. The TRANSIENT
+  # first-passage model (mv_curve, hitting_probabilities) replaced it and
+  # doesn't depend on this threshold at all -- see DECISIONS.md.
+  relaxation_time_flag_minutes: 15.0
+
+  # Transient first-passage window: MV(s,t,k) = P(hit empty within this
+  # many minutes | start with k bikes) reframing (DECISIONS.md, Phase 8
+  # "transient first-passage" entry). One hour, matching hour-of-week
+  # granularity -- must be an exact multiple of the panel's 15-min interval
+  # (60/15 = 4 steps).
+  first_passage_window_minutes: 60.0
+
+  # Above this many bikes, MV(s,t,k) is effectively zero within the
+  # first-passage window -- confirmed by both the model AND the
+  # cross-check regression agreeing on the magnitude there (DECISIONS.md's
+  # "persistence" entry: the earlier ratio blowup above k=3-4 was
+  # near-zero divided by near-zero, not real disagreement -- checked
+  # directly by segmenting the cross-check by k). mv_curve_exploded only
+  # reports k=1..min(capacity, mv_k_max); station-hours whose real
+  # inventory never drops to this level are not eligible for incentive
+  # spend under this model (see eligibility_report).
+  mv_k_max: 4
+
+  # Chronic-cell timing-predictability threshold (DECISIONS.md's
+  # "schedulability" entry): a chronic cell (low_frac > 0.5) is classified
+  # "schedulable" if its single most common 15-min sub-interval position
+  # (0-3, i.e. :00/:15/:30/:45 into the hour) accounts for at least this
+  # share of its low weeks -- meaning a standing weekly incentive at that
+  # clock time would catch the deficit without a live inventory feed.
+  # Below this share, timing is erratic enough within the hour that it
+  # needs state-triggering like everything else, even though it's still
+  # chronic in FREQUENCY. 0.7 is a first-pass threshold, not fit to the
+  # data -- reported alongside the full modal_share distribution so it can
+  # be judged directly, not just via a binary cut.
+  schedulable_modal_share_threshold: 0.7
+
+allocation:
+  # Phase 8 Part B (RUNBOOK): every dollar and elasticity assumption the
+  # allocator (Part C, src/opt/allocate.py -- NOT YET BUILT) will need,
+  # explicit and sourced here rather than inline, per CLAUDE.md's
+  # non-negotiable ("money and elasticity assumptions live in
+  # config/params.yaml, never inline"). Two tiers throughout, per
+  # DECISIONS.md's "schedulability" and "chronicity vs. non-trip movement"
+  # follow-ups: Tier 1 = chronic + schedulable cells (standing weekly
+  # incentive, config/params.yaml's marginal_value.schedulable_modal_
+  # share_threshold defines membership); Tier 2 = everything else
+  # (state-triggered).
+
+  # Bike Angels' actual point -> dollar-equivalent redemption rate is not
+  # published anywhere this project has access to. SOURCE: NONE -- this is
+  # a round-number placeholder, not a citation. Calibrating it properly
+  # needs Citi Bike's actual redemption schedule (points convert to ride
+  # credits/merchandise, not cash, so "dollars" is already an
+  # approximation of redeemed value) or a comparable-program benchmark;
+  # absent either, treat any allocator dollar figure as denominated in
+  # "points at this assumed rate," not real currency.
+  dollars_per_point: 0.20
+
+  # SOURCE: NONE -- an arbitrary round number, not derived from Citi
+  # Bike's actual incentive spend (not public) or from any stated target
+  # (e.g. "spend enough to close X% of the residual gap"). Calibrating
+  # this for real needs either a disclosed operating budget to match, or
+  # inverting a target fill-rate lift through the (equally uncalibrated)
+  # elasticity curve below -- which means this number and the elasticity
+  # numbers can't really be fixed independently of each other.
+  weekly_budget: 10000
+
+  # Saturating elasticity, trips_induced(payout) = a * (1 - exp(-b *
+  # payout)), SPEC.md §6. THIS IS THE WEAKEST ASSUMPTION IN THE ENTIRE
+  # PROJECT, DELIBERATELY LEFT VISIBLE HERE RATHER THAN ONLY IN THE
+  # WRITEUP. Every other estimated quantity in this project traces to a
+  # procedure with a stated error bound (demand model: held-out WMAPE +
+  # matched-sampling recovery bias; inventory LP: bounds validation + DOT
+  # cross-check; simulator: sanity_true_dest mechanics proof). a and b
+  # below trace to NONE of that -- trips.parquet has no payout/incentive
+  # field, so there is no historical record in this dataset of how
+  # induced-move completion actually responds to payout level. SOURCE:
+  # NONE. Calibrating these for real needs one of: (a) Citi Bike/Lyft's
+  # own Bike Angels response data (payout vs. completion rate), which does
+  # not exist in this project's data and would have to come from the
+  # operator directly; (b) a stated-preference rider survey; (c) absent
+  # either, treat a/b as free parameters and report allocator OUTPUT as a
+  # sensitivity range across a plausible a/b grid, never as a single-point
+  # forecast. Until one of those happens, every allocator dollar-per-
+  # trip-saved number is conditional on this guess, not a prediction.
+  #
+  # Tier 1 (scheduled) is deliberately MORE CONSERVATIVE than Tier 2 --
+  # per DECISIONS.md's finding that chronic cells already show measurable
+  # non-trip bike movement and remain chronic despite it, so an induced
+  # move there is topping up a gap something else is already partially
+  # addressing, not filling a virgin one. That reasoning sets the
+  # DIRECTION (tier 1 < tier 2); it does not set the MAGNITUDE below --
+  # the specific gap between the two tiers' a/b values is itself a guess,
+  # not measured, same as the base numbers.
+  elasticity_tier1_scheduled:
+    a: 2.0   # asymptotic max induced trips/station-hour as payout -> infinity. GUESS.
+    b: 0.15  # saturation rate (1/dollar); smaller = slower saturation, more $ needed per unit lift. GUESS.
+  elasticity_tier2_dynamic:
+    a: 3.0   # higher ceiling than tier 1 -- these cells aren't already partially served, so more assumed headroom. GUESS.
+    b: 0.25  # faster saturation than tier 1 -- encodes LESS conservatism, not more evidence. GUESS.
+
+  # SOURCE: data/processed/marginal_value/station_hour.parquet's arr_rate
+  # (latent hourly arrival rate from demand.py's censored demand model,
+  # NOT raw observed counts -- same latent-not-observed reasoning as the
+  # simulator's queueing/first-passage work), converted to arrivals/hour
+  # and checked directly against chronic (Tier 1-eligible) cells: p50=0.55,
+  # p75=1.50, p90=3.25, p95=4.91 real arrivals/hour. Set at the p90,
+  # rounded -- an induced move adds at most as much extra hourly arrival
+  # volume as the busier chronic stations already organically absorb, so
+  # the allocator can't recommend more incentivized arrivals in an hour
+  # than real through-traffic has ever actually supported at a comparable
+  # station. This IS a real, data-grounded value, unlike dollars_per_point/
+  # weekly_budget/elasticity above -- but it's a single GLOBAL cap, not
+  # per-station-hour; a more precise version would look up each specific
+  # station-hour's own arrival percentile at allocator run time rather
+  # than applying one network-wide ceiling everywhere.
+  max_induced_moves_per_station_hour: 3
+
+  # Rider-tolerable detour/wait ceiling for an induced move, matching
+  # src/sim/simulator.py's max_reroute_radius_m/max_reroute_hops in spirit
+  # (a plausibility cap on how far a rider will go out of their way).
+  # SOURCE: NONE -- given directly, not derived from this project's trip-
+  # duration data. Calibrating it properly would mean pulling the real
+  # duration distribution for trips whose (start, end) pair matches a
+  # plausible induced-move OD pair (nearby zone, opposite of the commuter-
+  # dipole direction) and picking a percentile of THAT distribution,
+  # analogous to how the reroute cap could have been (but wasn't) derived
+  # from real reroute-adjacent trip durations rather than picked directly.
+  max_move_duration_min: 25
+
+  # Origin qualification (src/opt/allocate.py, CLAUDE.md's origin caveat):
+  # a candidate origin only counts as surplus if its OWN low_frac is at or
+  # below this -- symmetric with marginal_value's "low 0-10% of weeks"
+  # bucket (eligibility_frequency_report), i.e. "rarely low" gets the same
+  # threshold on the origin side that "chronic" gets on the destination
+  # side. Not calibrated beyond reusing that existing bucket boundary.
+  origin_max_low_frac: 0.10
+
+  # Elasticity sweep grid for allocate.py's stability analysis (SPEC §7 /
+  # this phase's plan-mode discussion) -- NOT a pipeline default, a
+  # deliberately wide stress-test range spanning both tiers' guessed (a,b)
+  # above, so the sweep asks "does the RANKING survive being wrong about
+  # elasticity," not "what's the true value." Grid density (5x5=25 draws)
+  # is a runtime/tractability choice, not a statistical one.
+  elasticity_sweep:
+    a_min: 1.0
+    a_max: 5.0
+    a_steps: 5
+    b_min: 0.05
+    b_max: 0.5
+    b_steps: 5

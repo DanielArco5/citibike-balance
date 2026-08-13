@@ -6,6 +6,595 @@ before an interview, when "why did I do it that way" needs a real answer.
 
 ---
 
+## Phase 8 (2026-08-13): equal-elasticity ablation on the Tier 1/Tier 2 ranking gap -- the reversal that makes it structural, not an artifact of the conservative-elasticity guess
+
+The entry below this one left a live objection unaddressed: Tier 1's
+elasticity (`elasticity_tier1_scheduled`, a=2.0/b=0.15) is DELIBERATELY more
+conservative than Tier 2's (a=3.0/b=0.25, per the chronicity-vs-non-trip-
+movement follow-up two entries down) -- so a fair critic could say the
+Tier1/Tier2 ranking gap is just that guess doing the work, not a real
+difference between the destinations themselves. Tested directly rather than
+left open: re-ran the top-100 ranking with Tier 1 and Tier 2 given IDENTICAL
+elasticity parameters, across seven (a, b) choices spanning the full
+plausible range -- Tier 2's own default, Tier 1's own default, the midpoint
+(2.5, 0.2), and both sweep extremes.
+
+**Result: Tier 1 lands at 3-4/100 under every identical-elasticity choice
+tested -- LESS than the 35/100 it gets under the original tier-differentiated
+setup, not more.** Removing Tier 1's "conservative" handicap and giving it
+the SAME curve Tier 2 gets (including Tier 2's own, more generous, a/b) made
+Tier 1's showing worse, not better.
+
+**Why this is stronger evidence than a null result.** The test was posed
+against three possible outcomes before running it: still loses under equal
+elasticity -> structural, stands on its own; wins or competes -> the ranking
+is largely an artifact of the conservative guess; in between -> report the
+crossover ratio at which Tier 1 starts entering the top 100. A plain "still
+loses, e.g. 20-30/100" would have been consistent with "the conservative
+guess matters somewhat but isn't the whole story" -- compatible with either
+the artifact explanation or the structural one, not decisive between them.
+Getting WORSE when the handicap is removed rules the artifact explanation out
+directly: if Tier 1's low ranking were an elasticity-assumption artifact,
+giving it Tier 2's own elasticity curve should have moved it toward Tier 2's
+territory, not further away. It moved further away. That direction can only
+be explained by something in the destinations themselves, independent of
+whichever elasticity curve either tier is assigned -- a stronger, more
+specific claim than "the result is robust to this assumption," and one that
+only the reversal, not a same-direction null result, could have supported
+this cleanly.
+
+**Traced to the actual value curves, not asserted from the ranking outcome
+alone:**
+
+| | ceiling value (median) | mv(k=1) median | mv(k=1) p90 | mv(k=1) max |
+|---|---|---|---|---|
+| Tier 1 | 1.45 | 0.58 | 0.91 | 2.58 |
+| Tier 2 | 1.54 | 0.71 | 1.17 | 5.72 |
+
+Ceiling values are close (within 6%) -- the gap that matters is in the FIRST
+increment and its tail: Tier 2's median mv(k=1) runs 23% higher than Tier
+1's, and its p90 and max both run roughly 2x Tier 1's. A top-100-by-net-
+value-per-dollar ranking is decided by the best individual opportunities,
+i.e. the right tail of this distribution, so Tier 2's fatter tail of
+occasional, acute, sharply-resolvable deficits wins the ranking regardless of
+which elasticity curve is layered on top -- exactly why re-weighting the
+elasticity multiplier couldn't move the outcome.
+
+**Same mechanism as the chronicity/non-trip-movement finding two entries
+down, not a new story layered next to it.** That entry established that
+chronic (Tier 1) cells already receive some non-trip inflow (median rising
+0.0 -> 0.154 bikes/interval across demand deciles, 7.5x non-chronic cells'
+mean, 12.3x their demand-normalized intensity) and remain chronic despite it
+-- i.e. Tier 1's marginal bike lands at a station under sustained,
+only-partially-corrected drain, which is precisely what a low, thin-tailed
+mv(k=1) describes quantitatively. A Tier 2 cell's occasional dip is, by
+construction, not under that kind of standing drain -- its rare stockouts are
+sharper, fuller events, which is what a fat right tail describes. The
+elasticity-sweep entry below named this qualitatively ("Tier 1's persistently
+low[...] cells" capture "a smaller fraction of their large ongoing deficit");
+this ablation is the mechanism-level confirmation of that same claim,
+isolated from the elasticity guess entirely rather than argued from it.
+
+**Consequence: Tier 1's funding case rests on two genuinely separate
+arguments, and the writeup must keep them apart, not conflate them.**
+
+- **Loses on marginal $/dollar, now on structural grounds, not an assumption
+  artifact:** 3-4/100 to 35/100 across every elasticity choice tested,
+  tier-differentiated or identical alike. This answers "where does the next
+  incremental incentive dollar do the most good right now" -- and the answer
+  is Tier 2, robustly.
+- **Wins on aggregate volume and schedulability, a completely different
+  question:** Tier 1 (chronic + schedulable cells) carries 44.2% of total
+  system-wide net-lost demand, and 99.6% of chronic cells (27,836/27,942)
+  clear the 0.7 schedulability threshold -- a standing weekly incentive keyed
+  to (station, hour-of-week), no live inventory feed required, materially
+  cheaper to operate than Tier 2's necessarily state-triggered pricing. This
+  answers "where does a fixed operational policy capture the most total loss
+  most cheaply" -- and the answer is Tier 1.
+
+Both are true and both are legitimate reasons to fund Tier 1; neither implies
+the other. The ranking result above is not evidence against the
+volume/schedulability case, any more than the volume case is evidence against
+the ranking result. The writeup should state both, name the question each
+one answers, and not let "Tier 1 loses" (true of the marginal-dollar ranking)
+bleed into "Tier 1 isn't worth funding" (not supported, and contradicted by
+the volume/schedulability case).
+
+---
+
+## Phase 8 (2026-08-13): allocator ranked by net-value-per-dollar with a flat per-trip value -- and the elasticity sweep caught that it had silently stopped depending on elasticity at all
+
+`src/opt/allocate.py`'s first version computed, for a candidate move at
+payout p: `trips_value = induced_trips(p) * (dest_mv - origin_cost)` and
+`dollar_cost = induced_trips(p) * p * dollars_per_point`, then ranked by
+`net_value_per_dollar = trips_value/dollar_cost - 1`. Running the
+elasticity sweep (a in [1,5], b in [0.05,0.5], 25 draws) against this
+produced Spearman rank correlation of EXACTLY 1.000 across all 300
+draw-pairs, zero variation, every draw's top-100 identical.
+
+**That result was too clean to report as "the recommendation is
+robust," and checking the algebra confirmed why: it was a formula
+artifact, not a finding.** `induced_trips(p)` is a common factor in both
+the numerator and denominator of `net_value_per_dollar` when `dest_mv` is
+a single flat value applied regardless of volume -- it cancels
+completely: `net_value_per_dollar = (dest_mv - origin_cost)/(p *
+dollars_per_point) - 1`, independent of `a` and `b` entirely, and
+monotonically decreasing in payout `p`, which meant the "best payout"
+search was silently always picking the SMALLEST value in `PAYOUT_GRID`
+regardless of elasticity. The sweep didn't fail to find instability --
+the ranking criterion, as originally written, had no mechanism by which
+elasticity COULD affect it. A perfectly stable result from a metric that
+structurally cannot vary is not evidence of robustness; it's a sign the
+test isn't testing what it looks like it's testing.
+
+**Fix: `trips_value` uses the destination's actual CUMULATIVE, SATURATING
+mv curve (`build_dest_cumulative_mv` -- MV(1) + MV(2) + ... + MV(k),
+capped hard at the destination's own measured k_max), not a flat ceiling
+value.** This reintroduces genuine diminishing returns: value stops
+growing once induced volume passes k_max, cost keeps rising linearly with
+payout, so there's a real interior trade-off, and WHICH payout is
+"best" -- and therefore which destinations rank highest -- now actually
+depends on how fast `a*(1-e^{-bp})` grows, i.e. on the elasticity curve.
+Re-run: Spearman correlation min=0.812, median=1.000, max=1.000 across
+the same 300 pairs -- most draws still agree closely (median 1.0), but a
+real, non-degenerate range now exists, and it's now trustworthy because
+the mechanism that would let it vary is actually present.
+
+**Stable core (targets in every one of the 25 draws' top 100): 80 of
+100.** Per this phase's framing, that's the actual recommendation --
+station-hours worth funding regardless of what the true elasticity turns
+out to be, not conditional on the specific (a, b) guess documented (and
+flagged as ungrounded) in config/params.yaml.
+
+**Secondary finding, unplanned but worth stating plainly: the top 100 by
+net-value-per-dollar is overwhelmingly Tier 2 (dynamic), not Tier 1
+(scheduled), even though Tier 1 carries 44.2% of total net-lost demand in
+aggregate (DECISIONS.md's schedulability entry).** Only 4 of 120 targets
+that ever appear across the sweep, and 3 of the 80-target stable core,
+are Tier 1. This is not a contradiction of the earlier concentration
+finding -- "which tier carries the most AGGREGATE loss" and "which
+individual station-hours offer the best MARGINAL return per incentive
+dollar" are different questions. Tier 1's elasticity is deliberately more
+conservative (config's stated reasoning: chronic cells already show
+measurable non-trip movement and stay chronic despite it, so an induced
+move tops up an already-addressed gap) and Tier 1 cells are persistently
+low, so a single nudge captures a smaller fraction of their large ongoing
+deficit than the same nudge captures at a Tier 2 cell's occasional dip.
+The allocator's ranked output is genuinely dominated by opportunistic
+Tier 2 targets; Tier 1's case for funding rests on aggregate volume and
+schedulability (a standing weekly cost with no live-feed requirement), not
+on winning this specific per-dollar ranking. Both are legitimate reasons
+to fund something; they are not the same reason, and the writeup should
+not conflate them.
+
+**Origin cost applies the same k <= mv_k_max discipline used everywhere
+else** (`qualifying_origins`): a station only qualifies as a surplus
+origin if its OWN low_frac is low (rarely low itself, config's
+`origin_max_low_frac`), and its cost is looked up from the SAME
+mv_curve.parquet at its own worst historical level, capped at mv_k_max --
+0 for the large majority that never dropped into the measured region,
+a real measured value for the minority that occasionally do. No origin's
+cost is assumed zero blindly; it's zero because it was checked and
+nothing was measured there.
+
+**What this module does NOT yet do, stated rather than hidden:**
+`max_move_duration_min` (config) is not applied -- there's no calibrated
+travel-time model in this project, so candidate OD pairs are restricted
+to same-zone_agg or real historical station-to-station flow (od_shares)
+as a plausibility proxy instead. Candidate destinations are prefiltered to
+the top `PREFILTER_N` (3,000) by ceiling value before origin-matching, for
+tractability against the ~265K-cell eligible population -- given how
+concentrated net-lost demand is in the chronic tail, this is very unlikely
+to exclude a genuine top-100 contender, but it is a real, stated bound,
+not an exhaustive search. Origin cost scales LINEARLY with induced trips
+(no equivalent cumulative-saturation treatment on the origin side) -- a
+smaller simplification than the destination-side bug just fixed, since
+most qualifying origins cost 0 regardless, but a real one, left for a
+later pass if origin-side volume ever becomes material.
+
+---
+
+## Phase 8 (2026-08-12): station inventory is persistent -- it broke the stationary queueing model, then bounded the transient one, then confounded the empirical cross-check. Same fact, three symptoms.
+
+`src/opt/marginal_value.py` (MV(s,t,k), SPEC.md §7) went through two model
+formulations before landing on one worth trusting, and the reason the
+first one failed is the same reason the second one has a real, bounded
+limitation rather than a clean answer everywhere. Worth stating once,
+plainly, rather than as three separate footnotes.
+
+**Attempt 1: stationary M/M/1/K queue, rejected on a checked number, not a
+hunch.** Modeled each station-hour's bike count as a birth-death chain and
+used its long-run equilibrium P(0 bikes) as P(stockout), varying capacity
+as a proxy for "adding a bike." Checked the chain's relaxation time before
+trusting the equilibrium assumption (median 9,249 minutes -- ~6.4 days --
+across 379,019 station-hour cells; p90 ~206 days). Root cause, also
+checked rather than assumed: 63% of cells sit at rho=lambda/mu in
+[0.8, 1.25] -- because Phase 4's rebalancing is DESIGNED to keep stations
+balanced, and successfully keeping a station balanced is exactly the
+condition under which a birth-death chain mixes slowest. A station whose
+supply is actively, successfully managed to stay near equilibrium is,
+perversely, the station whose queue take longest to reach that
+equilibrium from any given start. Not a modeling bug -- a real property
+of the system this project is trying to describe.
+
+**Attempt 2: transient first-passage.** Reframed the question to what it
+actually was operationally: "P(this station runs out within the next
+hour | it has k bikes now)," not "what fraction of all time is it at
+zero." Same birth-death chain, same LATENT (censored-demand-model, not
+observed) rates, but state 0 made absorbing and the one-step transition
+matrix (net change = Skellam(lambda) - Skellam-equivalent departures,
+same Poisson draw the forward simulator itself uses) raised to the
+4-step (1-hour) power -- standard first-passage construction, no
+stationarity assumption needed. `hitting_probabilities` /
+`check_concavity` in marginal_value.py. This is NOT provably concave by
+construction (unlike the stationary blocking probability) -- checked
+directly: 370,128/379,019 cells (97.7%) concave everywhere, 8,891 with at
+least one real violation, which the model reports (`first_concavity_
+violation_k`), not papers over.
+
+**The cross-check surfaced the SAME persistence fact a third time, and at
+first looked like a much worse failure than it was.** The local-
+sensitivity cross-check (empirical slope of real cross-week net-lost-
+demand against real cross-week starting inventory, no model involved)
+should, under the reframing, measure the same quantity as the model --
+both are now conditional-on-a-starting-level, not the stationary-vs-
+conditional mismatch that made the FIRST cross-check read near zero.
+First full run: empirical/model ratio median 2,062, p90 908,620 --
+looked catastrophic. Segmenting by the matched inventory level k
+(not run further with vague suspicion, but a direct filter) showed why:
+at k <= 3 (248 of ~372K matched cells), ratio median 1.88 -- same order
+of magnitude, real but modest disagreement. At k > 3 (the other 99.93%),
+BOTH model_mv and empirical_mv were within noise of zero (medians
+0.000000 and -0.000000) -- the "ratio" there is near-zero divided by
+near-zero, an artifact of the division, not evidence the two methods
+disagree. The persistence that broke Attempt 1 is exactly why: once a
+station carries more than a handful of bikes, its supply state is highly
+autocorrelated across hours (same slow-mixing dynamics), so (a) the
+model's 1-hour window genuinely won't see it run dry from a well-stocked
+start, correctly, and (b) the empirical regression's real-but-small
+residual signal at high k is itself most likely confounded BY that same
+autocorrelation (a week's mean_inventory being on the low side of normal
+at well-stocked levels is a marker for a broader lean stretch, not a
+random draw) -- not a sign the model is missing something at those
+levels.
+
+**Resolution: MV(s,t,k) is reported only for k <= `mv_k_max` (4,
+config/params.yaml), not because the model can't produce a number above
+that, but because neither method's number is trustworthy up there, and
+they don't need to disagree loudly to prove it -- they agree it's
+negligible.** `build_mv_curve_table` truncates the emitted curve at
+min(capacity, mv_k_max); a k with no row IS the answer for that k, not a
+gap. Re-run with truncation in place: 1,143 cells now have both a
+same-regime model AND cross-check estimate to compare (down from the
+prior run's misleading 372,222 "matches," almost all in the meaningless
+high-k regime) -- ratio median 4.71, p10 1.28, p90 107.28. Still not 1.0,
+real remaining disagreement worth further work, but the same order of
+magnitude, not the earlier four-orders-of-magnitude illusion.
+
+**Eligibility, quantified, not assumed small.** Station-hours whose real
+inventory ever reached <= mv_k_max bikes in at least one of the panel's
+~52 weeks: **265,525 / 379,019 (70.1%)** of all (station, hour-of-week)
+cells -- NOT a small pool. Those cells carry **99.9%** of total net-lost
+demand (384,690 / 385,267 trips, hour-window units) -- close to a
+near-tautology (a cell that never ran low mostly can't have lost much
+demand) rather than a surprising concentration finding. Practical
+consequence for Phase 8's allocator: it can exclude the 29.9% of cells
+that never came close to empty with essentially zero cost, but this is a
+real, useful trim of the search space, not the dramatic reduction "a
+small set carries most of the loss" would have implied. State the actual
+number, not the more flattering one that was hypothesized before it was
+checked.
+
+**Honest summary for whoever builds Phase 8's allocator on top of this:
+MV is MEASURABLE where a station-hour is near-empty (k <= 4) --
+cross-checked by two independent methods that now agree in magnitude --
+and only BOUNDABLE (known to be small, not given a precise value) where
+it isn't.** Both are real, reportable results. Treating the k > 4 region
+as "MV = 0, precisely" would overclaim precision the data doesn't
+support; treating it as "unknown" would discard what both methods agree
+on. `station_hour.parquet`/`mv_curve.parquet` report exactly the
+distinction: rows for k <= mv_k_max, silence above it.
+
+**Follow-up, same day: "ever reached k <= mv_k_max" was the wrong
+eligibility criterion, and the corrected one changes the answer to the
+concentration question above.** Incentive spend is a RECURRING policy --
+a cell that ran low once in 52 weeks and one that runs low every week are
+not the same allocation target, even though "ever" treats them
+identically. `eligibility_frequency_report` computes, per (station,
+hour-of-week), the FRACTION of its real observed weeks that were low, not
+just whether any were:
+
+| bucket | cells | share of cells | share of net-lost demand |
+|---|---|---|---|
+| never low | 113,494 | 29.9% | 0.15% |
+| low 0-10% of weeks | 122,623 | 32.4% | 6.7% |
+| low 10-25% of weeks | 66,705 | 17.6% | 15.4% |
+| low 25-50% of weeks | 48,255 | 12.7% | 33.5% |
+| low >50% of weeks (chronic) | 27,942 | 7.4% | **44.2%** |
+
+This IS the concentration finding the lifetime-max criterion missed.
+Cells low more than a quarter of the time (25-50% + chronic, 20.1% of all
+cells) carry 77.7% of total net-lost demand; the chronic bucket alone --
+7.4% of cells, under a tenth -- carries 44.2%, nearly half, by itself.
+Loss is NOT spread evenly across rare and chronic cells: it concentrates
+hard in the chronic tail. Phase 8's allocator should prioritize by
+low_frac, not just by eligibility -- the "70.1% eligible" figure above is
+still the correct answer to "ever," but it is the wrong number to reason
+about search-space size or expected payoff from; the chronic-and-frequent
+tail is where the effective problem actually lives.
+
+**Follow-up, same day: chronic deficits are overwhelmingly SCHEDULABLE,
+and the reason why is the persistence finding showing up a fourth time,
+not a new discovery of intra-hour clockwork.** The policy-shape question:
+if a chronic cell (low_frac > 0.5) always crosses <= mv_k_max at the same
+clock time each week, a standing weekly incentive catches it with no live
+inventory feed -- operationally far cheaper than dynamic, state-triggered
+pricing. If timing scatters within the hour, it needs state-triggering
+like everything else, chronic or not. `chronic_timing_summary` locates,
+per chronic cell, the 15-min sub-interval (0-3, i.e. :00/:15/:30/:45 into
+the hour) where each low week FIRST crossed the threshold, and measures
+how consistent that position is across the cell's low weeks (modal_share
+= fraction of low weeks matching the single most common position).
+
+Result, across all 27,942 chronic cells: modal_share median **0.97**
+(p25 0.93, p75 1.00), std_position median 0.24 (out of a max ~1.29 for a
+uniform 4-way split) -- **27,836 / 27,942 (99.6%) clear the 0.7
+schedulable threshold** (config/params.yaml's
+`schedulable_modal_share_threshold`). Split by how chronic: 3,535 cells
+(12.7% of the chronic bucket) are low in >80% of weeks, 24,407 (87.3%)
+in 50-80%.
+
+**Checked why the number is this clean before reporting it at face value:
+95.4% of all chronic-cell low-weeks first cross the threshold at
+position 0 -- the very FIRST 15-min slot of the hour, not a specific
+moment mid-hour.** 99.97% of chronic cells have position 0 as their
+modal position. This is the SAME persistence fact as the rest of this
+entry, not a new one: a station chronically low at hour t is, per the
+~6.4-day relaxation time, almost certainly already low walking INTO hour
+t from whatever came before it -- so "the deficit is present at :00" is
+what persistence predicts, not evidence of a precise trigger event partway
+through the hour. Practically this is good news, not a caveat that weakens
+the finding: it means hour-of-week granularity (already this whole
+module's unit) is sufficient for scheduling -- no need to reason about
+which 15-min slot within the hour to target, since it's essentially always
+the first one.
+
+**Consequence: Part B/C should be a TWO-TIER policy, not a single dynamic
+one.** Tier 1 -- chronic AND schedulable cells (27,836 of 27,942 chronic
+cells, carrying most of the 44.2% chronic-bucket net-lost share): a
+standing weekly incentive keyed to (station, hour-of-week), no live
+inventory feed, materially cheaper to operate than continuous dynamic
+pricing and a different recommendation than what Bike Angels does today
+(which is state-triggered). Tier 2 -- everything else (all non-chronic
+cells, plus the 106 chronic-but-erratic ones that miss the schedulability
+threshold): needs state-triggering, same as any dynamic-pricing baseline
+would assume uniformly. Building Part B/C as uniformly dynamic would spend
+the same operational complexity on the 44% of loss that doesn't need it as
+on the 56% that does.
+
+**Follow-up, same day: chronic cells are NOT unserved -- they already
+show materially MORE inferred NON-TRIP BIKE MOVEMENT than non-chronic
+cells at matched demand, and stay chronic anyway.** Before trusting a
+direction, the comparison method's own structural bias had to be checked
+first: Phase 4's N is inferred by an L1-MINIMAL-correction LP
+(`src/models/inventory.py`) that credits `inferred_nontrip_in` ONLY where
+a station's organic (N=0) trajectory would otherwise violate the lower
+bound -- so a station that never gets close to empty is structurally
+GUARANTEED near-zero inferred inflow REGARDLESS of whether it's actually
+serviced (confirmed by inventory.py's own
+`test_no_violation_needs_no_nontrip_movement`). This means "non-chronic
+cells show ~0 inferred inflow" is partly a MECHANICAL property of the
+estimation method, not proof those cells are never serviced -- the
+comparison can't speak to whether well-stocked stations are over- or
+under-served. It CAN speak to what's happening at chronic cells
+specifically, where the LP is forced to credit something whenever a
+violation would otherwise occur.
+
+Word choice matters here and is deliberate: this is NON-TRIP BIKE
+MOVEMENT (`inferred_nontrip_in`), not "rebalancing." Per the Phase 4
+R-to-N reframe above, the flow-balance signal can't distinguish operator
+rebalancing from maintenance pulls, broken-bike removal, or e-bike
+battery swaps -- N is a superset, and nothing in this comparison
+decomposes it. That's still enough to rule out hypothesis 2 (a
+genuinely-unserved station wouldn't show elevated non-trip inflow of ANY
+kind, rebalancing or otherwise), but it does not establish that trucks
+specifically visit chronic cells more, only that SOME non-trip cause adds
+bikes there more than at matched non-chronic cells.
+
+`rebalancing_vs_chronicity_report` (function name predates this wording
+correction; the quantity it measures is non-trip inflow, not isolated
+rebalancing), controlling for organic departure demand (`dep_rate`
+decile, NOT `mu` which already folds non-trip flow in -- conditioning on
+it would be circular): in EVERY SINGLE demand decile, non-chronic cells'
+median `inferred_nontrip_in_rate` is exactly 0.0, while chronic cells'
+median is positive and rises monotonically with demand (0.0 in the
+lowest decile to 0.154 bikes/interval in the highest). Robust across
+every cut checked, not a median artifact: 70.9% of chronic cells show
+SOME positive inflow vs. 15.3% of non-chronic; mean inflow 0.060 vs.
+0.008 (7.5x); mean demand-normalized "non-trip inflow intensity" (inflow
+/ dep_rate) 0.122 vs. 0.010 (12.3x).
+
+**Reading, with both caveats above in mind: chronic cells demonstrably DO
+show measurable, demand-scaling non-trip bike movement -- more so than
+non-chronic cells show, wherever either shows any at all -- and remain
+chronic (low_frac > 0.5) despite it.** This is the FIRST of the two
+hypothesized directions, not the second: NOT "genuinely unserved, outside
+efficient truck routes" (which would need near-zero non-trip inflow at
+chronic cells too, and it doesn't show that), but "already receiving
+some non-trip inflow that isn't sufficient." What does occur (median
+~6-8% of organic departure demand, chronic cells) is a partial patch, not
+a complete absence of non-trip movement.
+
+**Consequence for Part B: elasticity should be MORE CONSERVATIVE for the
+scheduled (Tier 1) cohort, and the headline claim is the correspondingly
+more modest one.** Tier 1's incentive-induced moves add to an ALREADY-
+PARTIALLY-ADDRESSED gap, not a virgin one -- some non-trip inflow is
+already reaching these cells and is demonstrably insufficient on its own,
+so incremental moves should be modeled with diminishing returns relative
+to a naive full-gap elasticity. The writeup should say the scheduled tier
+targets RESIDUAL deficit that persists despite existing non-trip bike
+movement, not unaddressed deficit -- "rider incentives reach exactly
+where trucks don't" is NOT supported by this data (it isn't isolated to
+trucks at all) and should not
+be the framing. The honest, still-strong version: incentives can close
+a gap that whatever's currently happening (mechanically inferred or
+genuinely operational) does not.
+
+---
+
+## Phase 7 (2026-08-12): forward simulator -- stockout-timing gate restated after diagnosing a structural (not fixable) limitation
+
+RUNBOOK Phase 7's original gate (SPEC.md §4's forward-simulation
+validation) required per-interval stockout-minutes correlation > 0.7
+against a held-out week (2025-10-06 to 2025-10-13, all 2,267 usable
+stations, 15-min steps). The simulator (`src/sim/simulator.py`,
+`src/models/od_shares.py`) never cleared that bar in any run mode --
+stochastic: 0.077-0.115 across reruns; forced-departures/OD-share-
+destinations: 0.05-0.06.
+
+**Diagnosis, not tuning, per RUNBOOK's own instruction.** Three run modes
+were built specifically to isolate WHERE the error lives, not to search
+for a parameter that makes the number look better:
+
+- `sanity_od`: departure COUNTS forced to real history, destinations still
+  drawn from `od_shares`' backoff-hierarchy model (origin x hour-of-week ->
+  zone x hour-of-week -> zone x daypart -> global).
+- `sanity_true_dest`: departure counts AND destinations both forced to
+  real history (`simulator.load_true_destination_trips`) -- isolates
+  everything else (routing, capacity constraints, baseline-N replay) from
+  destination-assignment error specifically.
+- `stochastic`: the real forward simulation -- departures sampled from the
+  fitted demand model, destinations from `od_shares`.
+
+Baseline-N-replay clipping was ruled out first: net clipping as a fraction
+of the ~37,690-bike fleet-size proxy is -6.4% (`sanity_od`) to -10.0%
+(`stochastic`), but drops to **-0.5%** in `sanity_true_dest` -- a ~12x
+reduction from fixing destinations alone, with nothing else touched.
+Clipping is mostly a DOWNSTREAM SYMPTOM of destination error (wrong
+destinations -> wrong local inventory state -> N, calibrated to the real
+trajectory, mismatches worse), not an independent conservation break.
+
+`sanity_true_dest` also clears the trip-count/volume gates outright: total
+trips 3.44% (gate <=5%), per-zone WMAPE 3.44% (gate <=15%), continuous
+inventory-level correlation **0.901** with a **1-bike median absolute
+error**. That's proof the mechanics -- routing, capacity constraints,
+reroute search, N replay -- are fundamentally sound given true trip-level
+ground truth. `sanity_od` and `stochastic`, with OD-share-drawn
+destinations, land at 7.8% total-trips error and continuous-inventory
+correlation of only 0.48-0.57 (5-6 bike median error) -- a genuinely
+degraded trajectory relative to `sanity_true_dest`, not a threshold
+artifact.
+
+**Why the per-interval stockout-timing gate cannot be fixed by more OD
+conditioning.** Destination is the other half of a realized trip.
+`od_shares.py`'s backoff hierarchy samples a destination from HISTORICAL
+MARGINALS conditioned on origin and time -- it gets aggregate flow right
+(that's what a marginal distribution is) and the REALIZED PAIRING wrong,
+because the true joint distribution of (origin, destination, time) can't
+be recovered from marginals alone without either the real paired data
+(which `sanity_true_dest` has, and a genuine forward simulation never
+will) or conditioning on enough context to reconstruct the pairing --
+which reintroduces the sparsity problem the backoff hierarchy exists to
+solve (see the Phase 7 plan-mode discussion on member/casual conditioning
+specifically:
+`/Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md`).
+Inventory is a PATH-DEPENDENT ACCUMULATION of realized pairings -- every
+wrong destination this step changes next step's starting state,
+compounding across 672 steps. More conditioning trades a little of that
+per-trip pairing error for materially worse sparsity (thinner cells, more
+fallback to zone/global tiers -- MORE marginal-distribution error, not
+less). Not a net win, and not attempted.
+
+**Resolution: the gate is restated to match what Phase 8 actually
+consumes, not abandoned.** Phase 8's MV(s,t) needs stockout FREQUENCY and
+recoverable volume at a station-hour-of-week granularity (SPEC.md §7), not
+exact 15-minute timing. The simulator validates on:
+- trip totals and per-zone volume (`sanity_true_dest`: 3.44% / 3.44%, both
+  under gate)
+- continuous inventory trajectory (`sanity_true_dest`: 0.901 corr, 1-bike
+  median error)
+- stockout rate by station-hour-of-week -- see the caveat below, honestly
+  reported rather than assumed to work
+
+It does NOT reproduce per-interval stockout timing under stochastic
+destination sampling, and per the argument above, structurally cannot.
+
+**Follow-up (same day): the single-week caveat above was retested across
+multiple weeks, and the assumption is FALSIFIED, not merely untested.**
+The theoretical argument (rate-based metrics should be more robust to
+destination-scrambling than exact timing, given enough aggregation) implies
+correlation should rise as more weeks are pooled into each (station,
+hour-of-week) cell. It doesn't. `src/sim/validate.py --multiweek` ran the
+`stochastic` simulator over 6 held-out weeks (2025-10-06 through
+2025-11-10, same seed each time -- only the underlying week's real data
+changes) and correlated pooled simulated-vs-actual stockout rate per
+(station, hour-of-week) at n_weeks = 1, 2, 4, 6:
+
+| n_weeks | n_cells | corr | WMAPE | mean\|diff\| |
+|---|---|---|---|---|
+| 1 | 367,190 | 0.043 | 218% | 0.075 |
+| 2 | 368,185 | 0.079 | 202% | 0.071 |
+| 4 | 369,594 | 0.100 | 195% | 0.070 |
+| 6 | 371,419 | 0.097 | 200% | 0.070 |
+
+Correlation plateaus around 0.10 and TICKS DOWN from 4 to 6 weeks, not up.
+Mean absolute error barely moves (0.075 -> 0.070). More data confirms the
+low correlation rather than resolving it -- this is not a sparsity
+artifact of the single-week test; it reproduces under 6x the pooling.
+
+**Consequence, stated plainly because it's bigger than an open risk: the
+simulator cannot supply P(stockout | s, t) at station-hour resolution, in
+any run mode, at any amount of week-pooling tried.** An MV(s,t) built by
+perturbing simulated inventory and re-running the network simulator would
+be ranking station-hours by simulator noise, not by real differences in
+stockout risk -- and any Phase 9 lift number computed that way would be
+measuring the optimizer learning to exploit its own simulator's
+destination-assignment noise, not a real intervention effect.
+
+**Resulting decision: Phase 8's MV(s,t) will be derived EMPIRICALLY from
+Phase 4-6 outputs, not by simulation.** `demand.py`'s censored demand
+model already produces, per (station, hour-of-week), a calibrated
+gross-unmet-demand estimate (validated to a bias of about +-0.02 under
+matched-sampling recovery testing -- see `calibrate_direction_matched`),
+and `substitution.py` already nets that down to `dep_net_lost` per
+interval. Averaged across the FULL YEAR (~52 weeks, not 6 simulated ones),
+that's up to ~208 real sub-observations per (station, hour-of-week) cell
+-- the exact statistical power problem that just failed above, solved by
+using the real historical record directly instead of simulated
+destination-shuffled weeks layered on top of it. The genuinely open part
+is the CONCAVITY curve (marginal value of the 1st, 2nd, ... nth bike, not
+just "some bike"): proposed as a birth-death/queueing approximation using
+`demand.py`'s already-fitted departure AND arrival rate estimates (both
+directions are already modeled) plus Phase 4's inferred N as the
+birth/death rates, giving a closed-form P(stockout | bikes = k) for every
+k and hence the full MV(s,t,k) curve without simulating the network at
+all -- cross-checked against the empirical marginal effect at station-hours
+where real cross-week starting-inventory variation exists, rather than
+trusted blindly. Elaborated when Phase 8 is actually built; filed here so
+the reasoning for NOT using the simulator for this step is on record
+before that code exists.
+
+**Mode usage going forward, stated explicitly so it isn't relitigated
+later.** `sanity_true_dest` is a MECHANICS-VALIDATION mode only -- it
+requires real trip-level ground truth that doesn't exist for a genuine
+forward simulation, so it is never run going forward. `stochastic` is
+what Phase 9 (policy comparison) runs -- but ONLY for system-level and
+per-zone aggregate lift and continuous inventory trajectories under a
+given policy, per the resolution above; NOT for station-level fill-rate or
+stockout numbers, which the multiweek result above confirms are simulator
+noise at that resolution. Phase 9 compares stochastic runs under different
+induced-move policies using the SAME seed/sampling noise, so destination-
+assignment error is present in both the baseline and treatment run and is
+EXPECTED to largely cancel in the reported difference (lift) rather than
+in either run's absolute numbers. **That cancellation is an ASSUMPTION
+carried forward from this validation, not proven here** -- it should be
+stated as such wherever Phase 9's lift numbers are reported, not treated
+as already established. Phase 8's MV(s,t) does NOT run the simulator at
+all (see above), so this caveat applies to Phase 9's policy-comparison
+step specifically, not to the allocator's ranking decisions.
+
+---
+
 ## Phase 6 (2026-08-12): volume vs. per-dock ranking -- and per-dock's own failure mode
 
 The Phase 6 heatmap (`src/viz/heatmap.py`) originally ranked zones for both
