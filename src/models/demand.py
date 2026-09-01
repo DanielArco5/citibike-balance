@@ -38,7 +38,7 @@ censored intervals.
 
 ---
 
-MEMORY-SAFETY RESTRUCTURE (see /Users/danielcrown1/.claude/plans/lucky-
+MEMORY-SAFETY RESTRUCTURE (see ~/.claude/plans/lucky-
 leaping-zebra.md): a first attempt to run this on the real ~80M-row panel
 thrashed for 8+ hours on a 16GB machine and was killed before writing any
 output -- the whole-panel-in-memory, four-full-pandas-copies design below
@@ -611,15 +611,31 @@ def compute_wmape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.abs(y_true - y_pred).sum() / denom) if denom > 0 else float("nan")
 
 
-def held_out_wmape(fitted: FittedDirection, holdout_df: pl.DataFrame, n_deciles: int = 10) -> pl.DataFrame:
-    """WMAPE on held-out UNCENSORED intervals only (RUNBOOK.md Phase 5's
-    deliverable: "WMAPE ... on held-out uncensored intervals, overall and by
-    demand decile") -- censored Y is a lower bound on true D, not usable as
-    ground truth for accuracy scoring. Returns one row per stratum
-    ("overall" + "decile_0".."decile_{n_deciles-1}", by D_hat)."""
+def predict_vs_actual_holdout(fitted: FittedDirection, holdout_df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(y, d_hat, interval_start) on held-out UNCENSORED intervals only --
+    censored Y is a lower bound on true D, not usable as ground truth.
+    Factored out of held_out_wmape so Phase 9's policy_compare.py
+    (SPEC.md §8's bootstrap axis (a): demand-model-residual uncertainty)
+    can reuse the exact same holdout-evaluation logic instead of
+    re-deriving it against a private function in a different module.
+    interval_start is included because that module aggregates to daily
+    totals before computing a residual ratio (per-row ratios are
+    dominated by zero-departure intervals at 15-min granularity -- see its
+    docstring), which held_out_wmape itself doesn't need but also doesn't
+    lose anything by carrying."""
     df = _direction_columns(holdout_df, fitted.spec).filter(~pl.col(fitted.spec.censor_col))
     d_hat = predict_gbt(fitted, df)
     y = df[fitted.spec.target_col].to_numpy().astype(float)
+    interval_start = df["interval_start"].to_numpy()
+    return y, d_hat, interval_start
+
+
+def held_out_wmape(fitted: FittedDirection, holdout_df: pl.DataFrame, n_deciles: int = 10) -> pl.DataFrame:
+    """WMAPE on held-out UNCENSORED intervals only (RUNBOOK.md Phase 5's
+    deliverable: "WMAPE ... on held-out uncensored intervals, overall and by
+    demand decile"). Returns one row per stratum ("overall" +
+    "decile_0".."decile_{n_deciles-1}", by D_hat)."""
+    y, d_hat, _interval_start = predict_vs_actual_holdout(fitted, holdout_df)
 
     overall = pl.DataFrame({"stratum": ["overall"], "wmape": [compute_wmape(y, d_hat)], "n": [len(y)]})
 

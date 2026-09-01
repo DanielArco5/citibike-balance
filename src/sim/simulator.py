@@ -4,7 +4,7 @@ hard gate before Phase 8 -- see validate.py for the held-out-week replay
 that decides whether it passes.
 
 Design decisions locked in during the Phase 7 plan-mode discussion (see
-/Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md)
+~/.claude/plans/read-spec-md-4-forward-wise-meadow.md)
 are documented inline at the point they're implemented, not repeated here.
 Two structural choices worth stating up front:
 
@@ -529,6 +529,7 @@ def run_step(
     rng: np.random.Generator,
     forced_departures: np.ndarray | None,
     forced_trips: pl.DataFrame | None = None,
+    demand_multiplier: float = 1.0,
 ) -> StepOutcome:
     """Mutates inventory, own_lag_1h_buffer, prev_departures in place --
     callers own the arrays and read them back via the returned StepOutcome
@@ -542,12 +543,18 @@ def run_step(
     forced_departures at some station), only the first actual_departures[i]
     of that station's forced trips are taken -- which specific ones is
     arbitrary (order carries no meaning here), same philosophy as
-    route_departures not caring about intra-destination-group order."""
+    route_departures not caring about intra-destination-group order.
+
+    demand_multiplier (Phase 9, SPEC.md §8's bootstrap axis (a) -- demand
+    model residual uncertainty): a single scalar applied to the GBT rate
+    prediction before Poisson sampling, ignored (1.0) outside a Phase 9
+    bootstrap replicate. Ignored entirely when forced_departures is set
+    (sanity_od/sanity_true_dest replay real counts, not model output)."""
     interval_start = calendar_row["interval_start"]
     n = network.n
 
     feat = _build_step_features(network, calendar_row, own_lag_1h_buffer, own_lag_1week_arr, prev_departures)
-    d_hat = demand.predict_gbt(fitted_dep, feat)
+    d_hat = demand.predict_gbt(fitted_dep, feat) * demand_multiplier
 
     if forced_departures is not None:
         sampled = forced_departures.astype(float)
@@ -651,6 +658,50 @@ class SimulationRun:
 MODES = ("stochastic", "sanity_od", "sanity_true_dest")
 
 
+def _induced_step_dicts(
+    induced_moves: pl.DataFrame | None,
+    calendar_weather: pl.DataFrame,
+    network: NetworkArrays,
+) -> tuple[dict, dict]:
+    """Builds (induced_in_by_step, induced_out_by_step), same shape as
+    run_simulation's n_in_by_step/n_out_by_step, from a Phase 9 policy's
+    induced-move schedule (src/opt/policy_baselines.py:
+    to_simulator_induced_moves -- origin_station_id, dest_station_id,
+    hour_of_week, induced_trips_per_hour). Each row is exploded across
+    every interval_start in the simulated week whose hour_of_week matches,
+    at 1/4 the hourly rate per 15-min step -- the same hour-of-week-only
+    granularity Phase 8's MV(s,t) already established as sufficient
+    (DECISIONS.md's "schedulability" finding: deficits recur at the same
+    clock time almost every week, no sub-hour targeting needed). Returns
+    ({}, {}) when induced_moves is None/empty (the do-nothing policy),
+    so callers can treat that case identically to no injection at all."""
+    if induced_moves is None or induced_moves.height == 0:
+        return {}, {}
+
+    how_map = calendar_weather.select("interval_start", "hour_of_week").unique()
+    exploded = induced_moves.select(
+        "origin_station_id", "dest_station_id", "hour_of_week", "induced_trips_per_hour"
+    ).join(how_map, on="hour_of_week", how="inner").with_columns(
+        (pl.col("induced_trips_per_hour") / 4.0).alias("induced_per_step")
+    )
+
+    in_table = exploded.group_by("dest_station_id", "interval_start").agg(
+        pl.col("induced_per_step").sum()
+    ).rename({"dest_station_id": "station_id"})
+    out_table = exploded.group_by("origin_station_id", "interval_start").agg(
+        pl.col("induced_per_step").sum()
+    ).rename({"origin_station_id": "station_id"})
+
+    def _dict_from(table: pl.DataFrame) -> dict:
+        out = {}
+        for interval_start, group in table.group_by("interval_start", maintain_order=True):
+            interval_start = interval_start[0] if isinstance(interval_start, tuple) else interval_start
+            out[interval_start] = _aligned_from_table(group, "induced_per_step", network, default=0.0)
+        return out
+
+    return _dict_from(in_table), _dict_from(out_table)
+
+
 def run_simulation(
     network: NetworkArrays,
     week: WeekInputs,
@@ -658,6 +709,8 @@ def run_simulation(
     od_model: od_shares.ODShareModel,
     sim_params: SimulationParams,
     mode: str,
+    induced_moves: pl.DataFrame | None = None,
+    demand_multiplier: float = 1.0,
 ) -> SimulationRun:
     """Three modes (see the Phase 7 plan-mode discussion and its follow-up
     on isolating clipping from destination fidelity):
@@ -672,7 +725,15 @@ def run_simulation(
       clipping (and everything else stateful about inventory update) from
       OD-destination-assignment error specifically. If this ALSO fails
       badly, the bug is not destination fidelity.
-    """
+
+    induced_moves/demand_multiplier (Phase 9, SPEC.md §8): both default to
+    a no-op (None / 1.0) so every existing call site (Phase 7's gate,
+    Phase 8) is unaffected. induced_moves is layered onto n_in_arr/n_out_arr
+    exactly like baseline N (SPEC.md §7: "incentives move bikes, they don't
+    create them" -- a zero-sum relocation), so it inherits the SAME
+    clip-to-[0, capacity] accounting already tracked for N; no changes to
+    run_step or route_departures are needed. demand_multiplier threads
+    straight through to run_step's Poisson rate."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
 
@@ -713,6 +774,7 @@ def run_simulation(
     n_in_by_step = _per_step_dict(week.n_schedule, "inferred_nontrip_in")
     n_out_by_step = _per_step_dict(week.n_schedule, "inferred_nontrip_out")
     own_lag_1week_by_step = _per_step_dict(week.own_lag_1week_table, "dep_own_lag_1week")
+    induced_in_by_step, induced_out_by_step = _induced_step_dicts(induced_moves, week.calendar_weather, network)
 
     step_outcomes: list[StepOutcome] = []
     t0 = time.monotonic()
@@ -720,6 +782,10 @@ def run_simulation(
         interval_start = calendar_row["interval_start"]
         n_in_arr = n_in_by_step.get(interval_start, np.zeros(network.n))
         n_out_arr = n_out_by_step.get(interval_start, np.zeros(network.n))
+        if induced_in_by_step:
+            n_in_arr = n_in_arr + induced_in_by_step.get(interval_start, np.zeros(network.n))
+        if induced_out_by_step:
+            n_out_arr = n_out_arr + induced_out_by_step.get(interval_start, np.zeros(network.n))
         own_lag_1week_arr = own_lag_1week_by_step.get(interval_start, np.zeros(network.n))
         forced = forced_by_step[interval_start] if forced_by_step is not None else None
         forced_trips = (
@@ -732,6 +798,7 @@ def run_simulation(
             network, inventory, own_lag_1h_buffer, prev_departures,
             fitted_dep, od_model, calendar_row, own_lag_1week_arr, n_in_arr, n_out_arr,
             tree, coords_rad, sim_params, rng, forced, forced_trips,
+            demand_multiplier=demand_multiplier,
         )
         step_outcomes.append(outcome)
 

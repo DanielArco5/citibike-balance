@@ -497,7 +497,7 @@ will) or conditioning on enough context to reconstruct the pairing --
 which reintroduces the sparsity problem the backoff hierarchy exists to
 solve (see the Phase 7 plan-mode discussion on member/casual conditioning
 specifically:
-`/Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md`).
+`~/.claude/plans/read-spec-md-4-forward-wise-meadow.md`).
 Inventory is a PATH-DEPENDENT ACCUMULATION of realized pairings -- every
 wrong destination this step changes next step's starting state,
 compounding across 672 steps. More conditioning trades a little of that
@@ -1054,3 +1054,79 @@ rebalance and confirm recovery") -- not by inspecting real output. The full
 2,270-station run was never eyeballed station-by-station before this test
 failed. The bug was fixed before it touched real data, which is the entire
 point of writing that test first.
+
+---
+
+## Phase 9 (2026-08-31): the "underpowered" bootstrap result was a measurement-design problem, not a power problem
+
+The 40-replicate main bootstrap (`reports/policy_comparison.md`'s system-level
+table) reported every policy's fill-rate lift CI straddling zero -- 0/5
+policies significant -- and the writeup up to this point treated that as a
+real power limitation: "the demand-residual and elasticity axes contribute
+genuinely large week-to-week variance that a bigger N would narrow." That
+framing was never checked against the alternative explanation before being
+written down.
+
+**The alternative, raised directly rather than discovered internally:** every
+policy funds at most a few thousand induced trips (SPEC.md's own candidate
+pool is 2,998 cells) against a system that moves ~875K trips/week. That's a
+>99.5%-of-the-denominator dilution of any real effect BEFORE bootstrap noise
+enters the picture -- a signal-to-noise ceiling set by the measurement's own
+denominator, which no amount of additional replicates can raise. "Underpowered"
+and "diluted past detectability by design" produce the identical symptom (CI
+straddles zero) but have opposite fixes -- one needs more replicates, the
+other needs a different denominator.
+
+**Test:** restrict fill rate to just the (station, hour-of-week) cells a
+policy itself funded (post `apply_move_cap`), paired against a do-nothing run
+on the SAME cells and the SAME replicate seed -- same 40 replicates, same
+seeds as the system-level table, just a narrower, paired denominator
+(`src/sim/policy_compare.py`'s `run_one_replicate_treated` /
+`compute_treated_cell_fill`, `reports/plot_policy_comparison.py`'s
+`build_treated_comparison`). Required re-running the simulator -- the raw
+per-station `station_intervals` were never checkpointed, only the
+system/zone-aggregated fill table (Phase 7's per-station output ban, see
+below) -- so this is a ~10-hour, 2-worker background job, not a re-query.
+
+**Result: 4/5 policies now show a fill-rate lift CI that excludes zero**
+(`uniform` +2.13pp [+0.85,+3.19], `proportional` +1.96pp [+0.68,+3.10],
+`top_n_stockout` +2.56pp [+0.48,+4.03], `allocator_full_budget` +2.06pp
+[+0.55,+3.08] -- only the natural-spend `allocator` at $377 stays
+inconclusive, +0.56pp [-0.63,+1.94], P(lift>0)=72%, consistent with it simply
+buying far less treatment than the other four's ~$10,000). Confirms the
+dilution explanation, not the power explanation: the same 40 draws that
+looked like pure noise at system level resolve into a clear, consistent
+signal once the denominator matches the intervention's actual footprint.
+`reports/policy_comparison.md`'s "Treated-cell paired comparison" section
+carries the full table; the system-level table above it is left as-is, not
+deleted -- it's still the honest answer to "what does this do to the whole
+network," it was just never a fair test of "does the treatment work."
+
+**A second, independent bug surfaced building this: `trips_recovered` must be
+defined as the reduction in LOST trips at the treated cells, not the change
+in arrivals.** An incentive move adds bikes at its destination, which fixes
+that cell's `lost_no_bike` (departures that used to fail there for lack of a
+bike) -- it does NOT directly change `direct_arrivals`/`rerouted_arrivals`
+at that same cell, which are driven by other stations' routing and are
+largely exogenous to this cell's own bike count. A first draft defined
+`trips_recovered` as the arrivals-side change (matching the system-level
+table's definition, which is correct AT system level, where arrivals ARE the
+right proxy for total completed trips) and got a median NEGATIVE
+trips_recovered for every policy despite a clearly positive, significant
+fill-rate lift -- the tell that the metric, not the result, was wrong.
+Fixed by tracking the LOST-side reduction directly
+(`lost_treated_do_nothing - lost_treated`); all 40/40 replicates then
+recovered positive trips for 4 of 5 policies, matching the lift-pp sign.
+Caught before writing the number down, not after -- checked why the sign
+looked wrong instead of reporting it.
+
+**Does this reopen the Phase 7 per-station output ban (CLAUDE.md's "no
+per-station fill-rate breakdown, ever")? No, and the distinction is
+load-bearing enough to restate here.** Phase 7 found simulated
+per-(station, hour-of-week) stockout timing doesn't correlate with REAL
+ground truth at that grain (pooled corr plateaus ~0.10) -- a claim about
+matching reality. This comparison never claims to match reality at station
+resolution; it only compares two runs of the SAME simulator, same seed,
+against each other, and every number reported is POOLED over hundreds to
+thousands of cells per policy -- never a single station's fill rate.
+`compute_treated_cell_fill` has no code path that can emit one.

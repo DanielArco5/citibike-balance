@@ -7,6 +7,7 @@ a synthetic fixture" rule. None of these touch real data on disk.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from sklearn.neighbors import BallTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from models import demand  # noqa: E402
 from models import od_shares  # noqa: E402
 from sim import simulator  # noqa: E402
 
@@ -239,3 +241,241 @@ def test_route_departures_direct_when_room_available():
     assert lost_past_cap.sum() == 0
     assert inventory[network.index_of["A"]] == pytest.approx(6.0)
     assert (trip_log["outcome"] == "direct").all()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 (SPEC.md §8): induced-move injection + demand_multiplier
+# ---------------------------------------------------------------------------
+
+
+def test_induced_step_dicts_none_or_empty_returns_empty_dicts():
+    network, _tree, _coords = _make_line_network(["A", "B"], [10, 10])
+    calendar = pl.DataFrame({"interval_start": ["t0", "t1"], "hour_of_week": [10, 11]})
+    empty = pl.DataFrame(schema={"origin_station_id": pl.String, "dest_station_id": pl.String, "hour_of_week": pl.Int64, "induced_trips_per_hour": pl.Float64})
+
+    for induced in (None, empty):
+        induced_in, induced_out = simulator._induced_step_dicts(induced, calendar, network)
+        assert induced_in == {}
+        assert induced_out == {}
+
+
+def test_induced_step_dicts_explodes_hour_of_week_across_matching_steps_at_quarter_rate():
+    """One induced move, A->C, 8 trips/hour at hour_of_week=10. The
+    simulated week has two 15-min steps at hour_of_week=10 (t0, t1) and one
+    at hour_of_week=11 (t2) -- expect 8/4=2.0 bikes/step added to C and
+    removed from A at BOTH hour-10 steps, and no entry at all for t2 (the
+    hour-11 step never matches, same "absent key defaults to zero" contract
+    run_simulation already relies on for baseline N)."""
+    network, _tree, _coords = _make_line_network(["A", "B", "C"], [10, 10, 10])
+    calendar = pl.DataFrame({"interval_start": ["t0", "t1", "t2"], "hour_of_week": [10, 10, 11]})
+    induced = pl.DataFrame(
+        {"origin_station_id": ["A"], "dest_station_id": ["C"], "hour_of_week": [10], "induced_trips_per_hour": [8.0]}
+    )
+
+    induced_in, induced_out = simulator._induced_step_dicts(induced, calendar, network)
+
+    assert set(induced_in.keys()) == {"t0", "t1"}
+    assert set(induced_out.keys()) == {"t0", "t1"}
+    for t in ("t0", "t1"):
+        assert induced_in[t][network.index_of["C"]] == pytest.approx(2.0)
+        assert induced_in[t][network.index_of["A"]] == pytest.approx(0.0)
+        assert induced_out[t][network.index_of["A"]] == pytest.approx(2.0)
+        assert induced_out[t][network.index_of["C"]] == pytest.approx(0.0)
+
+
+def test_induced_step_dicts_sums_multiple_moves_sharing_a_station():
+    """B is simultaneously an origin (funding A) and a destination (funded
+    by C) at the same hour -- induced_in/induced_out must each reflect ONLY
+    their own side's flows, summed independently, not netted against each
+    other."""
+    network, _tree, _coords = _make_line_network(["A", "B", "C"], [10, 10, 10])
+    calendar = pl.DataFrame({"interval_start": ["t0"], "hour_of_week": [10]})
+    induced = pl.DataFrame(
+        {
+            "origin_station_id": ["B", "C"],
+            "dest_station_id": ["A", "B"],
+            "hour_of_week": [10, 10],
+            "induced_trips_per_hour": [4.0, 4.0],
+        }
+    )
+
+    induced_in, induced_out = simulator._induced_step_dicts(induced, calendar, network)
+
+    assert induced_in["t0"][network.index_of["A"]] == pytest.approx(1.0)
+    assert induced_in["t0"][network.index_of["B"]] == pytest.approx(1.0)
+    assert induced_out["t0"][network.index_of["B"]] == pytest.approx(1.0)
+    assert induced_out["t0"][network.index_of["C"]] == pytest.approx(1.0)
+
+
+class _FakeGBT:
+    def __init__(self, value: float):
+        self.value = value
+
+    def predict(self, X):
+        return np.full(len(X), self.value)
+
+
+def _fake_fitted_departures(rate: float, station_ids: list[str]) -> demand.FittedDirection:
+    """Mirrors tests/test_demand.py's _fake_fitted -- a GBT stub that
+    ignores feature content and always predicts `rate`, so run_step's
+    Poisson sampling rate is known exactly (rate * demand_multiplier)."""
+    return demand.FittedDirection(
+        spec=demand.DEPARTURES,
+        gbt=_FakeGBT(rate),
+        glm=None,
+        station_enc=pl.DataFrame({"station_id": station_ids, "station_id_target_enc": [0.0] * len(station_ids)}),
+        station_global_mean=0.0,
+        zone_enc=pl.DataFrame({"zone_agg": ["z1"], "zone_agg_target_enc": [0.0]}),
+        zone_global_mean=0.0,
+        bucket_bias={},
+    )
+
+
+def _empty_od_model() -> od_shares.ODShareModel:
+    return od_shares.ODShareModel(
+        cell_tier=pl.DataFrame(
+            schema={"start_station_id": pl.String, "hour_of_week": pl.Int64, "start_zone_agg": pl.String, "daypart": pl.Int64, "tier": pl.String}
+        ),
+        station_hour_probs=pl.DataFrame(schema={"start_station_id": pl.String, "hour_of_week": pl.Int64, "end_station_id": pl.String, "prob": pl.Float64}),
+        zone_hour_probs=pl.DataFrame(schema={"start_zone_agg": pl.String, "hour_of_week": pl.Int64, "end_station_id": pl.String, "prob": pl.Float64}),
+        zone_daypart_probs=pl.DataFrame(schema={"start_zone_agg": pl.String, "daypart": pl.Int64, "end_station_id": pl.String, "prob": pl.Float64}),
+        global_probs=pl.DataFrame(schema={"end_station_id": pl.String, "prob": pl.Float64}),
+    )
+
+
+def _global_only_od_model(dest_id: str) -> od_shares.ODShareModel:
+    model = _empty_od_model()
+    model.global_probs = pl.DataFrame({"end_station_id": [dest_id], "prob": [1.0]})
+    return model
+
+
+def _calendar_row(interval_start: str, hour_of_week: int = 10, daypart: int = 2) -> dict:
+    return {
+        "interval_start": interval_start,
+        "is_holiday": False,
+        "hour_of_week": hour_of_week,
+        "daypart": daypart,
+        "month": 6,
+        "temp_c": 20.0,
+        "precip_mm": 0.0,
+        "precip_lag1h": 0.0,
+        "precip_lag2h": 0.0,
+        "wind_kph": 5.0,
+        "humidity_pct": 50,
+    }
+
+
+def _default_sim_params() -> simulator.SimulationParams:
+    return simulator.SimulationParams(
+        daypart_hour_edges=[7, 10, 16, 19, 22], max_reroute_radius_m=1000.0, max_reroute_hops=3, seed=0,
+        validation_week_start="2025-10-06",
+    )
+
+
+def _make_line_network_with_zone(station_ids: list[str], capacities: list[float], zone: str = "z1"):
+    """_make_line_network gives every station a null zone_agg (fine for the
+    reroute-only tests above), which polars infers as an Object column and
+    can't hash-join against a real String zone_agg -- run_step's feature
+    build DOES join on zone_agg (against FittedDirection.zone_enc), so the
+    run_step-level tests below need a real string zone instead."""
+    network, tree, coords_rad = _make_line_network(station_ids, capacities)
+    network.zone_agg = np.array([zone] * network.n, dtype=object)
+    return network, tree, coords_rad
+
+
+def test_run_step_demand_multiplier_zero_forces_zero_departures():
+    """Poisson(0) is deterministic -- rate * 0 always samples exactly 0
+    departures, regardless of the base GBT rate or rng draw. The cleanest
+    analytically-known-answer check that demand_multiplier (Phase 9,
+    SPEC.md §8's bootstrap axis (a)) actually reaches the sampling step."""
+    network, tree, coords_rad = _make_line_network_with_zone(["A", "B"], [10, 10])
+    fitted_dep = _fake_fitted_departures(rate=50.0, station_ids=["A", "B"])
+    od_model = _empty_od_model()
+    sim_params = _default_sim_params()
+    n = 2
+    calendar_row = _calendar_row("2025-10-06T10:00:00")
+
+    outcome = simulator.run_step(
+        network, np.array([10.0, 10.0]), np.zeros((n, demand.OWN_LAG_HOUR_INTERVALS)), np.zeros(n),
+        fitted_dep, od_model, calendar_row, np.zeros(n), np.zeros(n), np.zeros(n),
+        tree, coords_rad, sim_params, np.random.default_rng(0), forced_departures=None, forced_trips=None,
+        demand_multiplier=0.0,
+    )
+
+    assert outcome.departures_sampled.sum() == 0.0
+    assert outcome.departures_actual.sum() == 0.0
+    assert outcome.lost_no_bike.sum() == 0.0
+    assert outcome.trip_log.height == 0
+
+
+def test_run_step_demand_multiplier_scales_poisson_rate_up():
+    """Higher demand_multiplier -> higher effective Poisson rate -> higher
+    EXPECTED sampled departures. Averaged over many seeds since a single
+    Poisson draw is stochastic; the point is to catch a sign-flip or
+    no-op bug in the multiplier wiring, not to re-prove Poisson's mean."""
+    network, tree, coords_rad = _make_line_network_with_zone(["A", "B"], [10, 10])
+    fitted_dep = _fake_fitted_departures(rate=5.0, station_ids=["A", "B"])
+    od_model = _global_only_od_model("B")
+    sim_params = _default_sim_params()
+    n = 2
+    calendar_row = _calendar_row("2025-10-06T10:00:00")
+
+    def _sampled_total(multiplier: float, seed: int) -> float:
+        outcome = simulator.run_step(
+            network, np.array([1000.0, 1000.0]), np.zeros((n, demand.OWN_LAG_HOUR_INTERVALS)), np.zeros(n),
+            fitted_dep, od_model, calendar_row, np.zeros(n), np.zeros(n), np.zeros(n),
+            tree, coords_rad, sim_params, np.random.default_rng(seed), forced_departures=None, forced_trips=None,
+            demand_multiplier=multiplier,
+        )
+        return float(outcome.departures_sampled.sum())
+
+    totals_low = np.array([_sampled_total(0.2, seed) for seed in range(30)])
+    totals_high = np.array([_sampled_total(3.0, seed) for seed in range(30)])
+    assert totals_high.mean() > totals_low.mean()
+
+
+def test_run_simulation_induced_moves_relocates_bikes_beyond_baseline_n():
+    """End-to-end (run_simulation, not just run_step): with demand_multiplier
+    -> 0 (no organic trips at all) and n_schedule all zero (no baseline N),
+    the ONLY thing that can move a bike is an injected induced move. A
+    single-step week (one interval) with A->B, 4 trips/hour induced at that
+    step's hour-of-week must show up as exactly +1.0 bike at B and -1.0 at
+    A (4/4 quarter-hour rate), and the run's own clip accounting must show
+    NO violation (1 bike moving out of a 10-capacity, 5-bike station is
+    always in-bounds) -- a direct, analytically-known conservation check."""
+    network, tree, coords_rad = _make_line_network_with_zone(["A", "B"], [10, 10])
+    fitted_dep = _fake_fitted_departures(rate=5.0, station_ids=["A", "B"])
+    od_model = _empty_od_model()
+    sim_params = _default_sim_params()
+    n = 2
+
+    calendar_weather = pl.DataFrame([_calendar_row("2025-10-06T10:00:00")])
+    week = simulator.WeekInputs(
+        week_start=datetime(2025, 10, 6),
+        week_end=datetime(2025, 10, 13),
+        calendar_weather=calendar_weather,
+        initial_inventory=np.array([5.0, 5.0]),
+        own_lag_1h_seed=np.zeros((n, demand.OWN_LAG_HOUR_INTERVALS)),
+        prev_departures_seed=np.zeros(n),
+        n_schedule=pl.DataFrame(schema={"interval_start": pl.String, "station_id": pl.String, "inferred_nontrip_in": pl.Float64, "inferred_nontrip_out": pl.Float64}),
+        own_lag_1week_table=pl.DataFrame(schema={"interval_start": pl.String, "station_id": pl.String, "dep_own_lag_1week": pl.Float64}),
+        actual_departures=pl.DataFrame(schema={"interval_start": pl.String, "station_id": pl.String, "departures": pl.Float64}),
+        actual_arrivals_inventory=pl.DataFrame(
+            schema={"station_id": pl.String, "interval_start": pl.String, "inventory": pl.Float64, "is_bike_empty": pl.Boolean, "is_dock_full": pl.Boolean}
+        ),
+        half_cap_seeded_station_ids=[],
+    )
+    induced_moves = pl.DataFrame(
+        {"origin_station_id": ["A"], "dest_station_id": ["B"], "hour_of_week": [10], "induced_trips_per_hour": [4.0]}
+    )
+
+    run = simulator.run_simulation(
+        network, week, fitted_dep, od_model, sim_params, mode="stochastic",
+        induced_moves=induced_moves, demand_multiplier=0.0,
+    )
+
+    end_inventory = run.station_intervals.sort("station_id")["inventory"].to_list()
+    assert end_inventory == pytest.approx([4.0, 6.0])
+    assert run.total_n_bound_violations == 0
+    assert run.total_clip_created == 0.0
+    assert run.total_clip_destroyed == 0.0
