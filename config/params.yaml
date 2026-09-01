@@ -48,7 +48,7 @@ demand_model:
   run_length_bucket_edges: [1, 4]
 
   # Memory-safety restructure knobs (see the Phase 6 plan at
-  # /Users/danielcrown1/.claude/plans/lucky-leaping-zebra.md). panel.parquet
+  # ~/.claude/plans/lucky-leaping-zebra.md). panel.parquet
   # spans 2024-12-31 through 2025-12-31; RUNBOOK.md's "hold out the last 3
   # months by time" -> Oct/Nov/Dec 2025. Explicit date, not computed at
   # runtime, so a later panel refresh doesn't silently move the boundary.
@@ -72,7 +72,7 @@ demand_model:
 simulation:
   # Phase 7 forward simulator (SPEC.md §4, RUNBOOK Phase 7). Plan-mode
   # discussion before this phase's implementation is at
-  # /Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md.
+  # ~/.claude/plans/read-spec-md-4-forward-wise-meadow.md.
 
   # OD destination-choice backoff hierarchy (src/models/od_shares.py). No
   # OD-share artifact existed before this phase -- origin x hour-of-week is

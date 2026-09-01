@@ -4,7 +4,8 @@
 # month that fails rather than aborting. Writes a summary at the end.
 set -u
 
-TRIPS_DIR="/Users/danielcrown1/Documents/Citibike/citibike-balance/data/raw/trips"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRIPS_DIR="$REPO_ROOT/data/raw/trips"
 STATUS_FILE="$TRIPS_DIR/_download_status.txt"
 MONTHS="202501 202502 202503 202504 202505 202506 202507 202508 202509 202510 202511 202512"
 

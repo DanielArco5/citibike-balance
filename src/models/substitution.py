@@ -56,7 +56,7 @@ from sklearn.neighbors import BallTree
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # Production input: demand.py's per-month checkpoints (see the Phase 6
-# memory-safety restructure, /Users/danielcrown1/.claude/plans/lucky-
+# memory-safety restructure, ~/.claude/plans/lucky-
 # leaping-zebra.md). Read via pl.scan_parquet(dir/"*.parquet") -- this
 # module's algorithm was already bounded (neighbor pairs precomputed once,
 # joined only against stockout rows, never a full station x neighbor x

@@ -4,7 +4,7 @@ demand.
 
 Reads data/processed/unmet_demand_net.parquet (src/models/substitution.py's
 output, chunked per month -- see the Phase 6 memory-safety restructure at
-/Users/danielcrown1/.claude/plans/lucky-leaping-zebra.md) and
+~/.claude/plans/lucky-leaping-zebra.md) and
 data/processed/stations_zoned.parquet (zone capacity + zone/station
 centroids). Not part of the automated pipeline -- run manually after
 substitution.py, same "rerun and eyeball the gate" pattern as

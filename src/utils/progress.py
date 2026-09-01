@@ -1,5 +1,5 @@
 """Progress/memory logging for chunked full-panel pipelines (Phase 6
-restructure -- see /Users/danielcrown1/.claude/plans/lucky-leaping-zebra.md).
+restructure -- see ~/.claude/plans/lucky-leaping-zebra.md).
 stdlib only (`resource`), no psutil, per CLAUDE.md's no-new-deps-beyond-
 what's-used pattern."""
 from __future__ import annotations

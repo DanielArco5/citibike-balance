@@ -1,6 +1,7 @@
 #!/bin/bash
 set -u
-TRIPS_DIR="/Users/danielcrown1/Documents/Citibike/citibike-balance/data/raw/trips"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRIPS_DIR="$REPO_ROOT/data/raw/trips"
 STATUS_FILE="$TRIPS_DIR/_retry_status.txt"
 MONTHS="202504 202505 202506 202507"
 

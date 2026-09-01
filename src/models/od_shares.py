@@ -5,7 +5,7 @@ trips.parquet has raw (start, end) pairs but nothing in src/features or
 src/models aggregates them into an OD table.
 
 Backoff hierarchy, confirmed in the Phase 7 plan-mode discussion (see
-/Users/danielcrown1/.claude/plans/read-spec-md-4-forward-wise-meadow.md):
+~/.claude/plans/read-spec-md-4-forward-wise-meadow.md):
 origin x hour-of-week is ~2,270 x 168 = ~381K cells, most too thin to trust
 directly (many stations see only a handful of trips at a given
 hour-of-week across a whole year). Rather than smoothing every cell with a
